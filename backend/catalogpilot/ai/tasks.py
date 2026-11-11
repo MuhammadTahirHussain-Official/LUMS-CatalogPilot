@@ -260,7 +260,11 @@ def validate_output(task: str, inp: dict[str, Any], out: dict[str, Any],
         report.check("schema", ok_type, "title is missing, multi-line or too long")
         if not ok_type:
             return report
-        report.edit_ratio = _edit_ratio(inp["title"], title)
+        # Removing recognised promotional phrases is the safest kind of edit, so the change is
+        # measured against the title with those phrases already taken out (recomputed here,
+        # never taken from the model's own account of what it removed).
+        stripped = clean_text(re.sub(r"[\s\-,/!*|]+$", "", _PROMO.sub(" ", inp["title"])))
+        report.edit_ratio = min(_edit_ratio(inp["title"], title), _edit_ratio(stripped, title))
         report.check("edit_ratio", report.edit_ratio <= 0.6, "changes too much of the title")
         _no_new(source_all, title, report)
         src_words = set(taxonomy._TOKEN.findall(source_all.lower()))

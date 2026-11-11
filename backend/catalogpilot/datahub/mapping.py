@@ -56,11 +56,11 @@ _SYNONYMS: dict[str, list[str]] = {
     "weight": ["weight", "variantgrams", "weightkg", "weightg", "shippingweight", "weightlbs"],
     "option1_name": ["option1name"], "option1_value": ["option1value", "size"],
     "option2_name": ["option2name"], "option2_value": ["option2value", "color", "colour"],
-    "option3_name": ["option3name"], "option3_value": ["option3value", "material"],
+    "option3_name": ["option3name"], "option3_value": ["option3value"],
 }
 _LOOKUP = {syn: target for target, syns in _SYNONYMS.items() for syn in syns}
 _WEIGHT_HINT = {"variantgrams": "g", "weightkg": "kg", "weightg": "g", "weightlbs": "lb"}
-_IMPLIED_OPTION = {"size": "Size", "color": "Color", "colour": "Colour", "material": "Material"}
+_IMPLIED_OPTION = {"size": "Size", "color": "Color", "colour": "Colour"}
 
 
 def _norm(header: str) -> str:

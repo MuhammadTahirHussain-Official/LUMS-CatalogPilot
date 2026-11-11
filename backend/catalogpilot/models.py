@@ -79,6 +79,8 @@ class User(Base):
     totp_secret_enc: Mapped[bytes | None] = mapped_column(LargeBinary)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     totp_last_counter: Mapped[int | None] = mapped_column(BigInteger)  # single-use codes (SEC-IAM-07)
+    verify_token_hash: Mapped[bytes | None] = mapped_column(LargeBinary)
+    verify_expires_at: Mapped[datetime | None] = ts(nullable=True)
     failed_logins: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = ts(nullable=True)
     created_at: Mapped[datetime] = ts()

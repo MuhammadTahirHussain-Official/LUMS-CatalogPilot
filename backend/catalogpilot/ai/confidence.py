@@ -48,10 +48,16 @@ def raw_score(task: str, signals: dict[str, float]) -> float:
 
 def fit_isotonic(pairs: list[tuple[float, bool]]) -> list[tuple[float, float]]:
     """Pool-adjacent-violators. Returns steps (raw_upper_bound, precision), non-decreasing."""
-    pairs = sorted(pairs)
-    blocks: list[list[float]] = []  # [sum_correct, count, max_raw]
+    # Identical raw scores are one observation group: pool them first, otherwise a tie would
+    # be split into separate steps and a lookup would land on an arbitrary one.
+    grouped: dict[float, list[float]] = {}
     for raw, correct in pairs:
-        blocks.append([1.0 if correct else 0.0, 1.0, raw])
+        cell = grouped.setdefault(raw, [0.0, 0.0])
+        cell[0] += 1.0 if correct else 0.0
+        cell[1] += 1.0
+    blocks: list[list[float]] = []  # [sum_correct, count, max_raw]
+    for raw in sorted(grouped):
+        blocks.append([grouped[raw][0], grouped[raw][1], raw])
         while len(blocks) > 1 and blocks[-2][0] / blocks[-2][1] > blocks[-1][0] / blocks[-1][1]:
             s, c, m = blocks.pop()
             blocks[-1][0] += s
