@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+.next/
+out/
+
+# Local runtime data (database, uploaded files, dev master key)
+var/
+*.sqlite3
+*.db
+.env
+.env.local
+
+# Confidential specification documents: never commit to the public repo
+docs/*.docx
+README.md.txt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
