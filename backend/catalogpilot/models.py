@@ -458,7 +458,7 @@ class IdempotencyKey(Base, TenantOwned):
     key: Mapped[str] = mapped_column(String(200), primary_key=True)
     request_hash: Mapped[str | None] = mapped_column(String(64))
     status_code: Mapped[int | None] = mapped_column(Integer)
-    response: Mapped[Any] = mapped_column(JSON)
+    response: Mapped[Any] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = ts()
     expires_at: Mapped[datetime] = ts()
 
@@ -498,8 +498,8 @@ class AIProposal(Base, TenantOwned):
     run_id: Mapped[str | None] = mapped_column(ID, index=True)
     task: Mapped[str] = mapped_column(String(32), nullable=False)
     field_path: Mapped[str] = mapped_column(String(200), nullable=False)
-    original_value: Mapped[Any] = mapped_column(JSON)
-    proposed_value: Mapped[Any] = mapped_column(JSON)
+    original_value: Mapped[Any] = mapped_column(JSON, nullable=True)
+    proposed_value: Mapped[Any] = mapped_column(JSON, nullable=True)
     rationale: Mapped[str | None] = mapped_column(String(400))
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     signals: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
@@ -525,7 +525,7 @@ class ReviewDecision(Base, TenantOwned):
     proposal_id: Mapped[str] = mapped_column(ID, ForeignKey("ai_proposals.id"), index=True)
     decided_by: Mapped[str | None] = mapped_column(ID)  # NULL = policy auto-approval
     decision: Mapped[str] = mapped_column(String(8), nullable=False)
-    final_value: Mapped[Any] = mapped_column(JSON)
+    final_value: Mapped[Any] = mapped_column(JSON, nullable=True)
     reason: Mapped[str | None] = mapped_column(String(400))
     decided_at: Mapped[datetime] = ts()
 

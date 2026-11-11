@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     # AI
     ai_provider: str = "rules"  # rules | anthropic
     anthropic_api_key: str = ""
-    ai_model: str = "claude-haiku-5-5"
+    ai_model: str = "claude-opus-5-5"
     ai_job_token_budget: int = 2_000_000
 
     @property
