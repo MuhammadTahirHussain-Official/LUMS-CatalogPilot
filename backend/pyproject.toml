@@ -1,0 +1,20 @@
+[project]
+name = "catalogpilot"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101", "E501", "B904", "S311"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]

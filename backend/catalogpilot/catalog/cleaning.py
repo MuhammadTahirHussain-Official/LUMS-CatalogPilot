@@ -135,7 +135,9 @@ def parse_money(value: object, default_currency: str) -> tuple[int, str] | None:
         raise MoneyError("price is not finite")
     if number < 0:
         raise MoneyError("price cannot be negative")
-    minor = (number * (Decimal(10) ** currency_exponent(currency))).quantize(Decimal(1), rounding=ROUND_HALF_UP)
+    if number > Decimal(10) ** 11:  # checked before scaling: huge exponents cannot be quantized
+        raise MoneyError("price is implausibly large")
+    minor =(number * (Decimal(10) ** currency_exponent(currency))).quantize(Decimal(1), rounding=ROUND_HALF_UP)
     if minor > 10**13:
         raise MoneyError("price is implausibly large")
     return int(minor), currency

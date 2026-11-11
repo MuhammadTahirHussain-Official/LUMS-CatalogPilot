@@ -418,6 +418,7 @@ class JobItem(Base, TenantOwned):
     lease_owner: Mapped[str | None] = mapped_column(String(120))
     lease_until: Mapped[datetime | None] = ts(nullable=True)
     lease_fencing_token: Mapped[int | None] = mapped_column(BigInteger)  # HA-06
+    started_at: Mapped[datetime | None] = ts(nullable=True)  # set when a handler begins the external call
     crash_count: Mapped[int] = mapped_column(Integer, default=0)
     error_fingerprint: Mapped[str | None] = mapped_column(String(64))
     last_error: Mapped[dict[str, Any] | None] = mapped_column(JSON)

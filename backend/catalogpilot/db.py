@@ -17,9 +17,17 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import ForeignKey, String, create_engine, event, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker, with_loader_criteria
+from sqlalchemy.orm import (
+    DeclarativeBase,
+    Mapped,
+    Session,
+    declared_attr,
+    mapped_column,
+    sessionmaker,
+    with_loader_criteria,
+)
 
 from .config import get_settings
 
@@ -37,6 +45,10 @@ class TenantOwned:
     """Marker mixin: the model has a ``tenant_id`` column and is isolated per tenant."""
 
     __tenant_owned__ = True
+
+    @declared_attr
+    def tenant_id(cls) -> Mapped[str]:  # noqa: N805 - models may override (e.g. as part of a key)
+        return mapped_column(String(36), ForeignKey("tenants.id"), nullable=False, index=True)
 
 
 class TenantIsolationError(RuntimeError):
