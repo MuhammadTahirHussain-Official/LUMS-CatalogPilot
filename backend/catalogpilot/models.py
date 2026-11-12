@@ -117,7 +117,7 @@ class OrgPolicy(Base, TenantOwned):
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     ai_mode: Mapped[str] = mapped_column(String(16), default="assisted")  # manual|assisted|automatic
     ai_field_allowlist: Mapped[list[str]] = mapped_column(
-        JSON, default=lambda: ["title", "description_html", "attributes", "category"]
+        JSON, default=lambda: ["title", "description_html", "attributes", "category", "seo"]
     )
     auto_approve_threshold: Mapped[float] = mapped_column(Float, default=0.9)
     bulk_four_eyes_threshold: Mapped[int] = mapped_column(Integer, default=50)

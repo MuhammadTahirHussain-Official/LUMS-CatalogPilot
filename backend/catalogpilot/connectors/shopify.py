@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..catalog.cleaning import format_money
+from ..catalog.cleaning import MoneyError, format_money, parse_money
 from . import http
-from .sdk import CallContext, Capabilities, RejectedError, RetryableError, UnsupportedOperation, WriteResult
+from .sdk import CallContext, Capabilities, CursorExpired, RejectedError, RetryableError, WriteResult
 
 API_VERSION = "2025-01"
 
@@ -96,7 +96,7 @@ class ShopifyConnector:
 
     def capabilities(self) -> Capabilities:
         return Capabilities(max_title_length=255, max_variants=2048, max_options=3, max_images=250, max_tags=250,
-                            supports_idempotency_key=False, requests_per_second=2.0, burst=20,
+                            supports_idempotency_key=False, supports_import=True, requests_per_second=2.0, burst=20,
                             credential_kinds=("access_token",), credential_fields=("access_token",),
                             needs_base_url=True)
 
@@ -141,7 +141,69 @@ class ShopifyConnector:
             raise RejectedError(f"Shopify could not delete the product: {problems[0].get('message')}")
 
     def list_products(self, ctx, cursor):
-        raise UnsupportedOperation("Importing from Shopify is not available yet; export a CSV from Shopify and upload it.")
+        try:
+            data = _gql(ctx, _LIST, {"after": cursor})
+        except RejectedError as exc:
+            if cursor and "cursor" in exc.message.lower():
+                raise CursorExpired("Shopify no longer accepts this page marker.") from exc
+            raise
+        currency = ((data.get("shop") or {}).get("currencyCode") or "USD").upper()
+        products = data.get("products") or {}
+        entries = []
+        for node in products.get("nodes") or []:
+            try:
+                entries.append({"external_key": node["id"], "state": _to_state(node, currency)})
+            except (KeyError, TypeError, ValueError, MoneyError) as exc:
+                entries.append({"external_key": str(node.get("id", "")), "error": f"could not read this product ({type(exc).__name__})"})
+        page = products.get("pageInfo") or {}
+        return entries, (page.get("endCursor") if page.get("hasNextPage") else None)
+
+
+_LIST = """
+query Products($after: String) {
+  shop { currencyCode }
+  products(first: 50, after: $after, sortKey: ID) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id handle title descriptionHtml vendor productType tags status
+      seo { title description }
+      media(first: 50) { nodes { ... on MediaImage { image { url altText } } } }
+      variants(first: 100) {
+        pageInfo { hasNextPage }
+        nodes { sku barcode price compareAtPrice inventoryQuantity selectedOptions { name value } }
+      }
+    }
+  }
+}"""
+
+
+def _to_state(node: dict[str, Any], currency: str) -> dict[str, Any]:
+    variants = []
+    variant_block = node.get("variants") or {}
+    for v in variant_block.get("nodes") or []:
+        price = parse_money(v.get("price"), currency)
+        compare = parse_money(v.get("compareAtPrice"), currency)
+        variants.append({
+            "sku": v.get("sku"), "gtin": v.get("barcode"), "currency": currency,
+            "price_minor": price[0] if price else None, "compare_at_minor": compare[0] if compare else None,
+            "inventory": v.get("inventoryQuantity") if isinstance(v.get("inventoryQuantity"), int) else None,
+            # A product without real options has one variant "Title: Default Title"; that is not an option.
+            "option_values": {o["name"]: o["value"] for o in (v.get("selectedOptions") or [])
+                              if not (o.get("name") == "Title" and o.get("value") == "Default Title")},
+        })
+    state = {
+        "title": node["title"], "description_html": node.get("descriptionHtml") or "", "brand": node.get("vendor"),
+        "product_type": node.get("productType"), "tags": [t for t in (node.get("tags") or []) if not str(t).startswith("cp-")],
+        "status": {"ACTIVE": "active", "ARCHIVED": "archived"}.get(node.get("status"), "draft"),
+        "handle": node.get("handle"), "seo": node.get("seo") or {},
+        "source_category": [node["productType"]] if node.get("productType") else [],
+        "media": [{"url": m["image"]["url"], "alt": m["image"].get("altText") or ""}
+                  for m in ((node.get("media") or {}).get("nodes") or []) if m and m.get("image")],
+        "variants": variants,
+    }
+    if (variant_block.get("pageInfo") or {}).get("hasNextPage"):
+        raise ValueError("more than 100 variants")  # reported per product rather than silently truncated
+    return state
 
 
 CONNECTOR = ShopifyConnector()

@@ -244,11 +244,16 @@ def _execute(claim: Claim, worker_id: str, crash_hook=None) -> None:
                     "suggestion": "Contact support with the job id; other items were not affected."})
                 jobs.finalize_if_done(db, job)
                 return
-            if tenant.frozen or job.state not in RUNNABLE_JOB_STATES:
-                _release(db, claim, 30)
+            if job.state not in RUNNABLE_JOB_STATES or (tenant.frozen and item.operation != "import"):
+                _release(db, claim, 30)  # an emergency freeze stops writes to stores; reading is still safe
                 return
             if channel.health in ("paused", "reauth_required"):
                 _release(db, claim, 60)  # paused, not failed: resumes when the seller reconnects
+                return
+            if item.operation == "import":
+                from . import importer
+
+                importer.run(db, claim, item, job, channel, worker_id, crash_hook)
                 return
             wait = _admit(db, channel, utcnow())
             if wait > 0:

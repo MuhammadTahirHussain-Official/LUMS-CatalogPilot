@@ -70,15 +70,25 @@ class CategoryOut(BaseModel):
     rationale: str = Field(max_length=200)
 
 
+class SeoOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    seo_title: str = Field(max_length=70)
+    seo_description: str = Field(max_length=160)
+    changed: bool
+    rationale: str = Field(max_length=200)
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {"title": TitleOut, "description": DescriptionOut,
-                                       "attributes": AttributesOut, "category": CategoryOut}
+                                       "attributes": AttributesOut, "category": CategoryOut, "seo": SeoOut}
 
 _SYSTEM = {
     "title": (
         "You normalize e-commerce product titles and reply with JSON matching the schema only. "
         "Fix capitalization, spacing and punctuation and remove promotional phrases. Never add brands, "
         "materials, sizes, numbers, certifications or claims that are not in the data. Keep SKU-like tokens "
-        "and the brand. If the title cannot be improved safely, return it unchanged with changed=false."
+        "and the brand. If the title cannot be improved safely, return it unchanged with changed=false. "
+        "If the data has a 'preferences' object, follow it: title_style (title, sentence or keep), "
+        "remove_promo, brand_first, max_title_length."
     ),
     "description": (
         "You clean e-commerce product descriptions and reply with JSON matching the schema only. Keep the "
@@ -88,6 +98,11 @@ _SYSTEM = {
     "attributes": (
         "You extract product attributes that are explicitly stated in the data and reply with JSON matching "
         "the schema only. Copy values as written. If something is not stated, leave it out; never guess."
+    ),
+    "seo": (
+        "You write a search-result title (at most 60 characters) and description (at most 155 characters) "
+        "for a product and reply with JSON matching the schema only. Use only facts and words from the data. "
+        "Never add claims, prices, numbers, links or contact details."
     ),
     "category": (
         "You choose the best category for a product from the candidate list and reply with JSON matching the "
@@ -110,6 +125,8 @@ class RulesProvider:
             out = tasks.rule_description(inp)
         elif task == "attributes":
             out = tasks.rule_attributes(inp)
+        elif task == "seo":
+            out = tasks.rule_seo(inp)
         else:
             out = tasks.rule_category(inp, candidates)
         return Completion(out, self.name, candidates=candidates)
@@ -179,7 +196,7 @@ def provider_for(external_allowed: bool):
 def run_task(task: str, inp: dict[str, Any], external_allowed: bool = False) -> Completion:
     """Runs one task. A hosted-provider failure degrades to the rules provider: AI being down
     must never fail a job (AIR-18)."""
-    if task not in tasks.TASKS:
+    if task not in tasks.ALL_TASKS:
         raise ValueError(f"unknown task {task}")
     candidates = taxonomy.retrieve(tasks.category_query(inp), k=5) if task == "category" else []
     provider = provider_for(external_allowed)

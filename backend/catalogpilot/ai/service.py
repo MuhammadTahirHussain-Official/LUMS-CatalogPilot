@@ -21,7 +21,8 @@ from ..models import AIProposal, Catalog, OrgPolicy, Product, ReviewDecision, Us
 from ..security import audit
 from . import confidence, gateway, tasks, taxonomy
 
-POLICY_FIELD = {"title": "title", "description": "description_html", "attributes": "attributes", "category": "category"}
+POLICY_FIELD = {"title": "title", "description": "description_html", "attributes": "attributes",
+                "category": "category", "seo": "seo"}
 
 
 class ReviewError(Exception):
@@ -63,6 +64,8 @@ def _current_value(product: Product, task: str, locale: str) -> Any:
         return product.description_html.get(locale) or next(iter(product.description_html.values()), "")
     if task == "attributes":
         return product.attributes
+    if task == "seo":
+        return product.seo or {}
     return product.mapped_taxonomy_id
 
 
@@ -77,13 +80,20 @@ def _proposed_value(task: str, product: Product, out: dict[str, Any]) -> Any:
         new = [{"key": clean_text(a["key"], 60), "value": clean_text(a["value"], 200), "source": "extracted"}
                for a in out["attributes"] if a["key"].lower() not in have]
         return [*product.attributes, *new] if new else product.attributes
+    if task == "seo":
+        # Only fill what is empty: search text the seller already wrote is never replaced.
+        current = product.seo or {}
+        return {**current, "title": current.get("title") or clean_text(out["seo_title"], 70),
+                "description": current.get("description") or clean_text(out["seo_description"], 160)}
     return out["taxonomy_id"]
 
 
 def enhance(db: Session, catalog: Catalog, user_id: str | None, task_names: list[str] | None = None,
-            product_ids: list[str] | None = None, limit: int = 5000) -> dict[str, Any]:
+            product_ids: list[str] | None = None, limit: int = 5000,
+            preferences: dict[str, Any] | None = None) -> dict[str, Any]:
     policy = get_policy(db, catalog.tenant_id)
-    wanted = [t for t in (task_names or list(tasks.TASKS)) if t in tasks.TASKS]
+    wanted = [t for t in (task_names or list(tasks.ALL_TASKS)) if t in tasks.ALL_TASKS]
+    prefs = tasks.clean_preferences(preferences)
     if not policy.ai_enabled:
         raise ReviewError("ai_disabled", "AI assistance is turned off for this organization.", 409)
     allowed = [t for t in wanted if POLICY_FIELD[t] in (policy.ai_field_allowlist or [])]
@@ -103,6 +113,8 @@ def enhance(db: Session, catalog: Catalog, user_id: str | None, task_names: list
             inp = tasks.minimize(task, state, locale)
             if not inp["title"]:
                 continue
+            if task == "title":
+                inp["preferences"] = prefs
             done = gateway.run_task(task, inp, external_allowed=policy.external_ai_allowed)
             summary["tokens"] += done.tokens
             report = tasks.validate_output(task, inp, done.output, done.candidates)
@@ -169,6 +181,8 @@ def _change_for(product: Product, proposal: AIProposal, value: Any, locale: str)
         state = {"description_html": {**product.description_html, locale: value}}
     elif proposal.task == "attributes":
         state = {"attributes": value}
+    elif proposal.task == "seo":
+        state = {"seo": value}
     else:
         state = {"mapped_taxonomy_id": value}
     return Change(product.external_key, state, origin="ai", ref=f"proposal:{proposal.id}", partial=True)
@@ -192,6 +206,10 @@ def _validate_edit(task: str, value: Any) -> Any:
             raise ReviewError("validation_failed", "Attributes must be a list of key/value pairs.")
         return [{"key": clean_text(a["key"], 60), "value": clean_text(a["value"], 200),
                  "source": a.get("source", "explicit")} for a in value if clean_text(a["key"], 60)]
+    if task == "seo":
+        if not isinstance(value, dict):
+            raise ReviewError("validation_failed", "Search text is not valid.")
+        return {"title": clean_text(value.get("title"), 70), "description": clean_text(value.get("description"), 160)}
     if value is not None and taxonomy.by_id(str(value)) is None:
         raise ReviewError("validation_failed", "That category does not exist.")
     return value

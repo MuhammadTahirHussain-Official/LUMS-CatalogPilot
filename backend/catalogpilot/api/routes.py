@@ -23,6 +23,7 @@ from ..catalog.service import Change
 from ..connectors import csv_feed, get_connector, platforms
 from ..datahub import service as hub
 from ..datahub import storage
+from ..engine import importer
 from ..engine import jobs as job_service
 from ..engine import transform
 from ..identity import service as identity
@@ -555,6 +556,7 @@ class ChannelIn(Strict):
     platform: str = Field(max_length=32)
     name: str = Field(min_length=1, max_length=200)
     base_url: str | None = Field(default=None, max_length=500)
+    role: str = Field(default="destination", pattern="^(source|destination|both)$")
 
 
 class CredentialIn(Strict):
@@ -576,6 +578,7 @@ def _channel_view(db: Session, c: Channel) -> dict[str, Any]:
     return {"id": c.id, "platform": c.platform, "name": c.name, "role": c.role, "base_url": c.base_url,
             "health": c.health, "paused_reason": c.paused_reason, "connected": bool(c.credential_id) or not caps.credential_kinds,
             "needs_credential": bool(caps.credential_kinds), "live_listings": live,
+            "can_import": caps.supports_import and c.role in ("source", "both"),
             "created_at": c.created_at.isoformat()}  # no secret field exists in this schema
 
 
@@ -589,7 +592,7 @@ def list_platforms() -> dict[str, Any]:
                     "credential_fields": list(caps.credential_fields), "needs_base_url": caps.needs_base_url,
                     "limits": {"max_title_length": caps.max_title_length, "max_variants": caps.max_variants,
                                "max_options": caps.max_options, "requires_image": caps.requires_image},
-                    "verified": name in ("mock", "csv_feed")})
+                    "can_import": caps.supports_import, "beta": name not in ("mock", "csv_feed")})
     return {"data": out}
 
 
@@ -612,8 +615,13 @@ def create_channel(body: ChannelIn, db: Session = Depends(get_db), auth: Auth = 
         base_url = broker.validate_channel_url(body.base_url, caps.needs_base_url)
     except broker.VaultError as exc:
         raise Problem(exc.status, exc.code, exc.detail) from exc
+    role = body.role
+    if role != "destination" and not caps.supports_import:
+        raise Problem(422, "validation_failed", "Products cannot be imported from this kind of channel.")
     channel = Channel(tenant_id=auth.principal.tenant_id, platform=body.platform, name=clean_text(body.name, 200),
-                      base_url=base_url, created_by=auth.principal.user_id,
+                      base_url=base_url, created_by=auth.principal.user_id, role=role,
+                      # A sandbox store used as a source comes pre-filled with a messy demo catalog.
+                      config={"demo_products": 1200} if body.platform == "mock" and role != "destination" else {},
                       health="unknown" if caps.credential_kinds else "ok")
     db.add(channel)
     db.flush()
@@ -717,7 +725,7 @@ def feed(channel_id: str, db: Session = Depends(get_db), auth: Auth = Depends(re
 # ================================================================ jobs
 
 class JobIn(Strict):
-    kind: str = Field(pattern="^publish$")
+    kind: str = Field(pattern="^(publish|import)$")
     catalog_id: str
     channel_ids: list[str] = Field(min_length=1, max_length=25)
     options: dict[str, Any] = Field(default_factory=dict)
@@ -766,7 +774,12 @@ def create_job(body: JobIn, request: Request, db: Session = Depends(get_db), aut
     allowed = {"existing", "sandbox", "product_ids"}
     if set(body.options) - allowed:
         raise Problem(422, "validation_failed", f"Unknown options: {', '.join(sorted(set(body.options) - allowed))}.")
-    job = _job_call(job_service.create_publish_job, db, auth.principal, body.catalog_id, body.channel_ids, body.options)
+    if body.kind == "import":
+        if len(body.channel_ids) != 1 or body.options:
+            raise Problem(422, "validation_failed", "An import reads from exactly one store.")
+        job = _job_call(importer.create_import_job, db, auth.principal, body.channel_ids[0], body.catalog_id)
+    else:
+        job = _job_call(job_service.create_publish_job, db, auth.principal, body.catalog_id, body.channel_ids, body.options)
     return remember(request, _job_view(db, job), 202)
 
 
@@ -889,6 +902,7 @@ async def stream(request: Request, job_id: str, auth: Auth = Depends(require(P_J
 class EnhanceIn(Strict):
     tasks: list[str] | None = Field(default=None, max_length=10)
     product_ids: list[str] | None = Field(default=None, max_length=1000)
+    preferences: dict[str, Any] | None = None
 
 
 class DecideIn(Strict):
@@ -911,7 +925,8 @@ def enhance(catalog_id: str, body: EnhanceIn, request: Request, db: Session = De
             auth: Auth = Depends(require(P_CATALOG_WRITE))) -> dict[str, Any]:
     rate_limit(request, "enhance", 30, 600, key=auth.principal.tenant_id)
     catalog = catalog_service.get_catalog(db, catalog_id)
-    return _review_call(ai_service.enhance, db, catalog, auth.principal.user_id, body.tasks, body.product_ids)
+    return _review_call(ai_service.enhance, db, catalog, auth.principal.user_id, body.tasks, body.product_ids,
+                        preferences=body.preferences)
 
 
 @router.get("/proposals")

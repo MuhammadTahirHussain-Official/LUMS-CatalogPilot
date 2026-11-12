@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..catalog.cleaning import format_money
+from ..catalog.cleaning import MoneyError, format_money, parse_money
 from . import http
 from .sdk import CallContext, Capabilities, UnsupportedOperation, WriteResult
 
@@ -78,7 +78,7 @@ class WooCommerceConnector:
     label = "WooCommerce"
 
     def capabilities(self) -> Capabilities:
-        return Capabilities(max_title_length=200, max_variants=100, max_options=10, supports_idempotency_key=False,
+        return Capabilities(max_title_length=200, max_variants=100, max_options=10, supports_idempotency_key=False, supports_import=True,
                             requests_per_second=2.0, burst=10, credential_kinds=("api_key_pair",),
                             credential_fields=("consumer_key", "consumer_secret"), needs_base_url=True)
 
@@ -147,7 +147,62 @@ class WooCommerceConnector:
                 raise  # already gone is success (idempotent)
 
     def list_products(self, ctx, cursor):
-        raise UnsupportedOperation("Importing from WooCommerce is not available yet; export a CSV from WooCommerce and upload it.")
+        try:
+            page = max(1, int(cursor or 1))
+        except ValueError:
+            page = 1
+        currency = str((ctx.config or {}).get("currency") or "").upper()
+        if not currency:
+            current = http.request("GET", _url(ctx, "data/currencies/current"), auth=_auth(ctx))
+            currency = str(current.get("code") or "USD").upper() if isinstance(current, dict) else "USD"
+        # Ordered by id so that products added during the import land on later pages, not earlier ones.
+        products = http.request("GET", _url(ctx, "products"), auth=_auth(ctx),
+                                params={"page": page, "per_page": 50, "orderby": "id", "order": "asc", "status": "any"})
+        if not isinstance(products, list):
+            return [], None
+        entries = []
+        for product in products:
+            try:
+                entries.append({"external_key": str(product["id"]), "state": self._to_state(ctx, product, currency)})
+            except (KeyError, TypeError, ValueError, MoneyError) as exc:
+                entries.append({"external_key": str(product.get("id", "")), "error": f"could not read this product ({type(exc).__name__})"})
+        return entries, (str(page + 1) if len(products) == 50 else None)
+
+    def _to_state(self, ctx: CallContext, product: dict[str, Any], currency: str) -> dict[str, Any]:
+        def money(value: Any) -> int | None:
+            parsed = parse_money(value or None, currency)
+            return parsed[0] if parsed else None
+
+        def variant(v: dict[str, Any], options: dict[str, str]) -> dict[str, Any]:
+            regular, sale = money(v.get("regular_price")), money(v.get("sale_price"))
+            weight = v.get("weight")
+            return {
+                "sku": v.get("sku") or None, "currency": currency,
+                "price_minor": sale if sale is not None else regular,
+                "compare_at_minor": regular if sale is not None and regular is not None and regular > sale else None,
+                "inventory": v.get("stock_quantity") if isinstance(v.get("stock_quantity"), int) else None,
+                "weight_grams": float(weight) * 1000 if weight not in (None, "") else None,
+                "option_values": options,
+            }
+
+        if product.get("type") == "variable":
+            rows = http.request("GET", _url(ctx, f"products/{product['id']}/variations"), auth=_auth(ctx),
+                                params={"per_page": 100})
+            if isinstance(rows, list) and len(rows) == 100:
+                raise ValueError("more than 100 variations")
+            variants = [variant(v, {a["name"]: a["option"] for a in (v.get("attributes") or []) if a.get("option")})
+                        for v in (rows if isinstance(rows, list) else [])]
+        else:
+            variants = [variant(product, {})]
+        brand = next((b.get("name") for b in (product.get("brands") or []) if isinstance(b, dict)), None)
+        return {
+            "title": product["name"], "description_html": product.get("description") or "", "brand": brand,
+            "source_category": [c["name"] for c in (product.get("categories") or [])[:1] if c.get("name")],
+            "tags": [t["name"] for t in (product.get("tags") or []) if t.get("name")],
+            "status": "active" if product.get("status") == "publish" else "draft", "handle": product.get("slug"),
+            "media": [{"url": i["src"], "alt": i.get("alt") or ""} for i in (product.get("images") or []) if i.get("src")],
+            "variants": variants,
+        }
 
 
 CONNECTOR = WooCommerceConnector()

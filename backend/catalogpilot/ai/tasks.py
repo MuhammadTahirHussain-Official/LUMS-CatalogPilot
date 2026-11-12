@@ -15,12 +15,13 @@ from typing import Any
 from ..catalog.cleaning import clean_text, html_to_text, sanitize_html
 from . import taxonomy
 
-TASKS = ("title", "description", "attributes", "category")
+TASKS = ("title", "description", "attributes", "category")  # benchmarked and calibrated
+ALL_TASKS = (*TASKS, "seo")  # seo has no benchmark yet: always reviewed, never auto-approved
 PROMPT_VERSIONS = {"title": "title_normalize@3", "description": "description_cleanup@2",
-                   "attributes": "attribute_extract@2", "category": "category_map@2"}
+                   "attributes": "attribute_extract@2", "category": "category_map@2", "seo": "seo_snippet@1"}
 FIELD_OF = {"title": "title", "description": "description_html", "attributes": "attributes",
-            "category": "mapped_taxonomy_id"}
-RISK_OF = {"title": "low", "description": "low", "attributes": "low", "category": "high"}
+            "category": "mapped_taxonomy_id", "seo": "seo"}
+RISK_OF = {"title": "low", "description": "low", "attributes": "low", "category": "high", "seo": "low"}
 
 _URL = re.compile(r"(https?://|www\.)\S+|\b[\w.-]+\.(com|net|org|io|shop|store|co)\b(/\S*)?", re.I)
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
@@ -55,7 +56,7 @@ def minimize(task: str, product_state: dict[str, Any], locale: str) -> dict[str,
     description = html_to_text(text(product_state.get("description_html")))[:4000]
     base = {"title": title, "brand": product_state.get("brand") or "",
             "product_type": product_state.get("product_type") or "", "locale": locale}
-    if task in ("description", "attributes", "category"):
+    if task in ("description", "attributes", "category", "seo"):
         base["description"] = _EMAIL.sub("[email]", _PHONE.sub("[phone]", description))
     if task == "description":
         base["description_html"] = text(product_state.get("description_html"))[:8000]
@@ -106,12 +107,64 @@ def _smart_title(text: str, brand: str, mode: str) -> str:
     return " ".join(out)
 
 
+DEFAULT_PREFERENCES: dict[str, Any] = {
+    "title_style": "title",       # title | sentence | keep
+    "remove_promo": True,         # strip "FREE SHIPPING!!!", "BEST PRICE" and similar
+    "brand_first": False,         # put the brand at the start of the title when it is known
+    "max_title_length": None,     # shorten at a word boundary (None = leave length alone)
+}
+
+
+def clean_preferences(raw: dict[str, Any] | None) -> dict[str, Any]:
+    """The seller's answers to "how should we improve your products?". Unknown keys and
+    out-of-range values are dropped, never trusted."""
+    prefs = dict(DEFAULT_PREFERENCES)
+    raw = raw if isinstance(raw, dict) else {}
+    if raw.get("title_style") in ("title", "sentence", "keep"):
+        prefs["title_style"] = raw["title_style"]
+    for key in ("remove_promo", "brand_first"):
+        if isinstance(raw.get(key), bool):
+            prefs[key] = raw[key]
+    length = raw.get("max_title_length")
+    if isinstance(length, int) and not isinstance(length, bool) and 20 <= length <= 255:
+        prefs["max_title_length"] = length
+    return prefs
+
+
+def _sentence_case(text: str, brand: str) -> str:
+    out = []
+    for i, word in enumerate(text.split(" ")):
+        core = word.strip(",.;:()[]")
+        low = core.lower()
+        if not core:
+            continue
+        if brand and low == brand.lower():
+            fixed = brand
+        elif low in _ACRONYMS or any(ch.isdigit() for ch in core) or (core != low and core != core.upper() and core[1:] != core[1:].lower()):
+            fixed = core.upper() if low in _ACRONYMS else core  # acronyms, model numbers, iPhone-style words
+        elif i == 0:
+            fixed = core[:1].upper() + core[1:].lower()
+        else:
+            fixed = low
+        out.append(word.replace(core, fixed, 1))
+    return " ".join(out)
+
+
 def rule_title(inp: dict[str, Any]) -> dict[str, Any]:
     original = inp["title"]
+    prefs = clean_preferences(inp.get("preferences"))
+    brand = inp.get("brand") or ""
     text = original
-    for pattern in (_URL, _EMAIL, _PHONE):  # a title is never the place for links or contact details
+    # A title is never the place for links or contact details. Drop the sentence that carries
+    # one; if that would leave nothing, remove just the address.
+    pieces = re.split(r"(?<=[.!?])\s+", text)
+    kept = [s for s in pieces if not any(p.search(s) for p in (_URL, _EMAIL, _PHONE))]
+    if kept and len(kept) < len(pieces):
+        text = " ".join(kept)
+    for pattern in (_URL, _EMAIL, _PHONE):
         text = pattern.sub(" ", text)
-    text = _PROMO.sub(" ", text)
+    if prefs["remove_promo"]:
+        text = _PROMO.sub(" ", text)
     text = re.sub(r"[!*~|#]{1,}", " ", text)
     text = re.sub(r"([,.\-_/])\1+", r"\1", text)  # collapse repeated punctuation
     text = clean_text(text)
@@ -130,11 +183,52 @@ def rule_title(inp: dict[str, Any]) -> dict[str, Any]:
     mode = "upper" if upper > 0.6 * max(1, len(letters)) else "mixed" if has_capitalized else "lower"
     text = re.sub(r"\bmens\b", "Men's", text, flags=re.I)
     text = re.sub(r"\bwomens\b", "Women's", text, flags=re.I)
-    text = clean_text(_smart_title(text, inp.get("brand") or "", mode))
-    removed = [m.group(0).strip() for m in _PROMO.finditer(original)]
+    notes = []
+    if prefs["title_style"] == "sentence":
+        text = clean_text(_sentence_case(_smart_title(text, brand, mode), brand))
+        notes.append("sentence case")
+    elif prefs["title_style"] == "title":
+        text = clean_text(_smart_title(text, brand, mode))
+    else:
+        text = clean_text(text)
+    if prefs["brand_first"] and brand and text:
+        without = re.sub(rf"(?i)(?<!\w){re.escape(brand)}(?!\w)[\s,:-]*", "", text).strip(" -,:")
+        if without and not text.lower().startswith(brand.lower()):
+            text = clean_text(f"{brand} {without}")
+            notes.append("brand first")
+    limit = prefs["max_title_length"]
+    if limit and len(text) > limit:
+        cut = text[:limit + 1].rsplit(" ", 1)[0].rstrip(" ,-/")
+        if len(cut) >= 10:
+            text = cut
+            notes.append(f"shortened to {limit} characters")
+    removed = [m.group(0).strip() for m in _PROMO.finditer(original)] if prefs["remove_promo"] else []
+    rationale = ("Removed promotional text; " if removed else "") + "tidied capitalization and spacing"
     return {"title": text or original, "changed": text != original and bool(text),
-            "rationale": ("Removed promotional text; " if removed else "") + "normalized capitalization and spacing.",
-            "removed_tokens": removed, "casing_recovered": mode != "mixed"}
+            "rationale": rationale + (" (" + ", ".join(notes) + ")" if notes else "") + ".",
+            "removed_tokens": removed,
+            # Re-cased from scratch, or restyled to the seller's taste: either way the result was
+            # not covered by the benchmark the auto-approve threshold was measured on.
+            "casing_recovered": mode != "mixed" or bool(notes)}
+
+
+def rule_seo(inp: dict[str, Any]) -> dict[str, Any]:
+    """Search-result title and description built only from the product's own words."""
+    title = rule_title({**inp, "preferences": None})["title"]
+    seo_title = title if len(title) <= 60 else title[:61].rsplit(" ", 1)[0].rstrip(" ,-/")
+    # Whole sentences that carry a link or contact detail are dropped; removing only the
+    # address would leave "Visit or mail" behind in a search result.
+    sentences = re.split(r"(?<=[.!?])\s+", clean_text(inp.get("description") or ""))
+    kept = [s for s in sentences if "[email]" not in s and "[phone]" not in s
+            and not any(p.search(s) for p in (_URL, _EMAIL, _PHONE))]
+    text = clean_text(_PROMO.sub(" ", " ".join(kept)))
+    if len(text) > 155:
+        cut = text[:156]
+        stop = max(cut.rfind(". "), cut.rfind("! "))
+        text = cut[: stop + 1] if stop >= 60 else cut.rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+    description = text or seo_title
+    return {"seo_title": seo_title, "seo_description": description, "changed": True,
+            "rationale": "Written from the product's own title and description for search results."}
 
 
 def rule_description(inp: dict[str, Any]) -> dict[str, Any]:
@@ -298,6 +392,22 @@ def validate_output(task: str, inp: dict[str, Any], out: dict[str, Any],
         ungrounded = [a["value"] for a in attrs if a["value"].lower().replace(" ", "") not in lowered.replace(" ", "")]
         report.check("grounded", not ungrounded, f"values not found in the source: {', '.join(ungrounded[:3])}")
         _no_new(source_all, " ".join(a["value"] for a in attrs), report)
+    elif task == "seo":
+        seo_title, seo_desc = out.get("seo_title"), out.get("seo_description")
+        ok_type = (isinstance(seo_title, str) and isinstance(seo_desc, str) and 0 < len(seo_title) <= 70
+                   and 0 < len(seo_desc) <= 160 and len(seo_title.splitlines()) == 1)
+        report.check("schema", ok_type, "search title or description is missing or too long")
+        if not ok_type:
+            return report
+        combined = f"{seo_title} {seo_desc}"
+        _no_new(source_all, combined, report)
+        # Stricter than "nothing new": search text may carry no link or contact detail at all,
+        # even one that was already in the product's description.
+        report.check("no_contacts", not _contacts(combined) and "[email]" not in combined and "[phone]" not in combined,
+                     "contains a link or contact detail")
+        src_words = set(taxonomy._TOKEN.findall(source_all.lower())) | {"men", "women"}
+        new_words = {w for w in taxonomy._TOKEN.findall(combined.lower()) if w not in src_words and len(w) > 2}
+        report.check("no_new_entities", not new_words, f"adds words not in the source: {', '.join(sorted(new_words)[:5])}")
     elif task == "category":
         allowed = {node.id for node, _ in (candidates or [])}
         chosen = out.get("taxonomy_id")

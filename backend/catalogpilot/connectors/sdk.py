@@ -35,6 +35,11 @@ class RejectedError(ConnectorError):
     """The platform refused this item (validation). Retrying the same payload cannot succeed."""
 
 
+class CursorExpired(ConnectorError):
+    """The platform no longer accepts a page cursor. The import restarts from the first page;
+    because imports are upserts, nothing is duplicated."""
+
+
 class UnsupportedOperation(ConnectorError):
     """Declared, never silently ignored (INT-02)."""
 
@@ -56,6 +61,7 @@ class Capabilities:
     supports_delete: bool = True
     supports_delist: bool = True
     supports_read_back: bool = True
+    supports_import: bool = False  # can products be read from this platform (source side)?
     currencies: tuple[str, ...] = ()  # empty = any
     requests_per_second: float = 2.0
     burst: int = 40

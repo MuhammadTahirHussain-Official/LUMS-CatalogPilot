@@ -135,7 +135,7 @@ def test_policy_manual_mode_kill_switch_and_allowlist(tenants):
         policy.ai_mode, policy.ai_field_allowlist = "manual", ["title"]
         summary = service.enhance(s, cat, None)
         assert summary["auto_approved"] == 0 and summary["pending"] == 1
-        assert set(summary["skipped_tasks"]) == {"description", "attributes", "category"}
+        assert set(summary["skipped_tasks"]) == {"description", "attributes", "category", "seo"}
         policy.ai_enabled = False
         with pytest.raises(service.ReviewError):
             service.enhance(s, cat, None)
@@ -158,4 +158,5 @@ def test_injection_text_in_product_data_changes_nothing_dangerous(tenants):
         for proposal in s.execute(select(AIProposal)).scalars():
             text = str(proposal.proposed_value)
             assert "evil.example" not in text and proposal.field_path in ("title", "description_html", "attributes",
-                                                                           "mapped_taxonomy_id")
+                                                                           "mapped_taxonomy_id", "seo")
+            assert "[email]" not in text and "Visit or mail" not in text
