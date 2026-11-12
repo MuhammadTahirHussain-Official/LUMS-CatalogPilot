@@ -385,3 +385,51 @@ def test_upload_attack_corpus(api):
     assert state["state"] == "clean"
     assert sorted(m["status"] for m in state["media"]) == ["skipped", "stored", "stored"]
     assert not os.environ.get("CP_CLAMD_HOST")
+
+
+def test_store_to_store_migration_through_the_api(api):
+    """The wizard's calls, end to end: connect a source, import, improve with preferences,
+    connect a destination, publish. Plus who may see what."""
+    for url in ("/v1/platforms", "/v1/ai/status", "/v1/taxonomy"):
+        assert api.get(url).status_code == 401, url  # nothing about the product is public
+    u, other = User(api, "owner@example.test"), User(api, "other@example.test", "Other")
+    cat = u.post("/v1/catalogs", {"name": "Main"}).json()["id"]
+    platforms = {p["platform"]: p for p in u.get("/v1/platforms").json()["data"]}
+    assert platforms["mock"]["can_import"] and not platforms["csv_feed"]["can_import"]
+    assert u.post("/v1/channels", {"platform": "csv_feed", "name": "f", "role": "source"}).status_code == 422
+    src = u.post("/v1/channels", {"platform": "mock", "name": "Old store", "role": "source"}).json()
+    assert src["role"] == "source" and src["can_import"]
+    body = {"kind": "import", "catalog_id": cat, "channel_ids": [src["id"]]}
+    assert u.post("/v1/jobs", body).json()["code"] == "channel_not_connected"
+    u.put(f"/v1/channels/{src['id']}/credential", {"kind": "access_token", "secret": {"access_token": "tok_source_0123456789"}})
+    assert other.post("/v1/jobs", body).status_code == 404  # another organization cannot read my store
+    job = u.post("/v1/jobs", body).json()
+    assert job["kind"] == "import" and job["state"] == "running"
+    assert u.post("/v1/jobs", body).json()["code"] == "job_already_running"
+    for _ in range(40):
+        worker.run_once()
+    done = u.get(f"/v1/jobs/{job['id']}").json()
+    assert done["state"] == "completed" and done["preview"]["seen"] == 1200 and done["preview"]["skipped"] == 2
+    assert "cursor" not in done["preview"]  # internal paging state is not exposed
+    assert other.get(f"/v1/jobs/{job['id']}").status_code == 404
+    products = u.get(f"/v1/catalogs/{cat}/products?limit=5").json()["data"]
+    assert products and all("<script" not in str(p["description_html"]) for p in products)
+
+    summary = u.post(f"/v1/catalogs/{cat}/enhance", {"tasks": ["title", "seo"],
+                                                     "preferences": {"title_style": "sentence", "max_title_length": 5}}).json()
+    assert summary["proposals"] > 0 and summary["discarded"] == 0  # the absurd length (5) is ignored, not obeyed
+    pending = u.get("/v1/proposals?status=pending&risk=low&limit=200").json()["data"]
+    assert {p["task"] for p in pending} <= {"title", "seo"} and all(p["status"] == "pending" for p in pending)
+    assert u.post("/v1/proposals:decide", {"proposal_ids": [p["id"] for p in pending], "decision": "approve"}).json()["applied"] > 0
+
+    dest = u.post("/v1/channels", {"platform": "mock", "name": "New store"}).json()["id"]
+    u.put(f"/v1/channels/{dest}/credential", {"kind": "access_token", "secret": {"access_token": "tok_dest_0123456789abc"}})
+    assert u.post("/v1/jobs", {"kind": "import", "catalog_id": cat, "channel_ids": [dest]}).status_code in (409, 422)
+    pub = u.post("/v1/jobs", {"kind": "publish", "catalog_id": cat, "channel_ids": [dest], "options": {"sandbox": True}}).json()
+    assert pub["preview"]["writes"] == 10 and mock.store_for(dest).writes == 0
+    u.post(f"/v1/jobs/{pub['id']}/approve", {})
+    drain()
+    assert u.get(f"/v1/jobs/{pub['id']}").json()["counts"] == {"PUSHED": 10}
+    assert len(mock.store_for(dest).products) == 10
+    usage = u.get(f"/v1/channels/{src['id']}/credential/usage").json()["data"]
+    assert usage and set(usage[0]) == {"at", "operation", "result"}  # no handler or task identifiers

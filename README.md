@@ -8,6 +8,12 @@ This branch is a working first version of the platform described in the eight
 specification documents (SRS, architecture, database, API, security, AI, testing, roadmap).
 It runs on one machine with nothing to install beyond Python.
 
+**Moving a store:** the "Move a store" wizard reads products from one store (practice
+store, Shopify or WooCommerce), suggests improvements based on a few questions, and
+publishes to another store, with a checkpoint after every page so a crash never restarts
+or duplicates anything. Full documentation is in [`documentation/`](documentation/README.md);
+start with [known gaps](documentation/08-known-gaps.md) before using it on a real store.
+
 ## Run it locally
 
 Requirements: Python 3.12 or newer. No Docker, database server or Node.js needed.
@@ -21,7 +27,7 @@ python -m venv .venv
 ```
 
 ```bash
-.venv/Scripts/python -m uvicorn catalogpilot.api.app:app --app-dir backend --port 8000
+.venv/Scripts/python -m uvicorn catalogpilot.api.app:app --app-dir backend --port 8000 --no-server-header
 ```
 
 Open http://localhost:8000 and create an account. To fill it with sample products and a
@@ -52,7 +58,7 @@ cd backend
 ../.venv/Scripts/python -m pytest
 ```
 
-45 tests cover tenant isolation, the crash/takeover guarantees (no duplicates, no lost
+61 tests cover tenant isolation, store-to-store migration at 1,500 products, the crash/takeover guarantees (no duplicates, no lost
 items, no zombie writes), credential handling, the upload attack corpus, AI guardrails and
 the HTTP API end to end.
 

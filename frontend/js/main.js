@@ -1,5 +1,7 @@
 import * as api from "./api.js";
-import { action, clear, confirmDialog, emptyState, field, h, modal, showError, stateBadge, table, toast, when } from "./ui.js";
+import { mountPip, pipOnRoute, unmountPip } from "./pip.js";
+import { action, clear, confirmDialog, emptyState, field, h, icon, modal, showError, stateBadge, table, toast, when } from "./ui.js";
+import { migrateView } from "./views-migrate.js";
 import { catalogView, reviewView, uploadsView } from "./views-catalog.js";
 import { activityView, channelsView, jobsView } from "./views-publish.js";
 
@@ -116,16 +118,17 @@ function authScreen() {
 // ------------------------------------------------------------------ shell and routing
 
 const NAV = [
-  ["overview", "Overview", null],
-  ["catalog", "Catalog", "catalog:read"],
-  ["uploads", "Uploads", "uploads:write"],
-  ["review", "Review", "catalog:read"],
-  ["channels", "Channels", "channels:read"],
-  ["jobs", "Publishing", "jobs:read"],
-  ["activity", "Activity", "audit:read"],
-  ["settings", "Settings", null],
+  ["overview", "Home", null, "home"],
+  ["migrate", "Move a store", "jobs:write", "move"],
+  ["catalog", "Products", "catalog:read", "box"],
+  ["uploads", "Upload a file", "uploads:write", "upload"],
+  ["review", "Review suggestions", "catalog:read", "check"],
+  ["channels", "Stores", "channels:read", "plug"],
+  ["jobs", "Publishing", "jobs:read", "send"],
+  ["activity", "Activity log", "audit:read", "clock"],
+  ["settings", "Settings", null, "gear"],
 ];
-const VIEWS = { overview: overviewView, catalog: catalogView, uploads: uploadsView, review: reviewView,
+const VIEWS = { overview: overviewView, migrate: migrateView, catalog: catalogView, uploads: uploadsView, review: reviewView,
   channels: channelsView, jobs: jobsView, activity: activityView, settings: settingsView };
 
 let teardown = null;
@@ -133,7 +136,7 @@ export function navigate(route) { location.hash = `#/${route}`; }
 
 async function render() {
   if (teardown) { try { teardown(); } catch { /* view already gone */ } teardown = null; }
-  if (!state.me || state.me.mfa_pending) { clear(root).append(authScreen()); return; }
+  if (!state.me || state.me.mfa_pending) { unmountPip(); clear(root).append(authScreen()); return; }
   const [route, ...params] = (location.hash.replace(/^#\//, "") || "overview").split("/");
   const name = VIEWS[route] ? route : "overview";
   const org = state.me.organizations.find((o) => o.id === state.me.organization_id);
@@ -141,15 +144,22 @@ async function render() {
   clear(root).append(h("div", { class: "shell" },
     h("nav", { class: "side", "aria-label": "Main" },
       h("div", { class: "brand" }, h("span", { class: "logo", "aria-hidden": "true" }, "◆"), "CatalogPilot"),
-      h("ul", {}, NAV.filter(([, , perm]) => !perm || can(perm)).map(([key, label]) =>
-        h("li", {}, h("a", { href: `#/${key}`, class: key === name ? "on" : "", "aria-current": key === name ? "page" : null }, label)))),
+      h("ul", {}, NAV.filter(([, , perm]) => !perm || can(perm)).map(([key, label, , glyph]) =>
+        h("li", {}, h("a", { href: `#/${key}`, class: key === name ? "on" : "", "aria-current": key === name ? "page" : null }, icon(glyph), h("span", {}, label))))),
       h("div", { class: "who" },
         h("div", { class: "org" }, org?.name || "Organization"),
         h("div", { class: "muted small" }, `${state.me.user.email} · ${state.me.role}`),
         h("button", { class: "link", onclick: action(async () => { await api.post("/auth/logout"); state.me = null; render(); }) }, "Sign out"))),
     h("div", { class: "main" },
+      h("div", { id: "offline-banner", class: "banner warn", role: "status", hidden: navigator.onLine },
+        "You are offline. Work already running continues on the server; this page will catch up when you reconnect."),
       org?.frozen ? h("div", { class: "banner bad", role: "alert" }, "Publishing is frozen for this organization. Nothing will be sent to any channel until an owner unfreezes it in Settings.") : null,
       content)));
+  mountPip();
+  const seenKey = `cp.seen.${name}`;
+  const firstVisit = !localStorage.getItem(seenKey);
+  localStorage.setItem(seenKey, "1");
+  pipOnRoute(name, pipNext, firstVisit);
   try {
     const result = await VIEWS[name](content, params);
     if (typeof result === "function") teardown = result;
@@ -161,6 +171,12 @@ async function render() {
 
 export const refresh = render;
 window.addEventListener("hashchange", render);
+// Connection changes only toggle a banner. Re-rendering here would throw away whatever the
+// person was typing when their connection flickered.
+const setOffline = (offline) => { const b = document.getElementById("offline-banner"); if (b) b.hidden = !offline; };
+window.addEventListener("online", () => setOffline(false));
+window.addEventListener("offline", () => setOffline(true));
+let pipNext = { label: "move your first store", route: "migrate" };
 
 // ------------------------------------------------------------------ overview
 
@@ -174,19 +190,24 @@ async function overviewView(el) {
   const products = catalogs.data.reduce((sum, c) => sum + (c.products || 0), 0);
   const pending = Object.values(proposals.pending || {}).reduce((a, b) => a + b, 0);
   const connected = channels.data.filter((c) => c.connected).length;
+  const published = jobs.data.some((j) => j.kind === "publish" && j.state === "completed");
   const steps = [
-    ["Create a catalog", catalogs.data.length > 0, "catalog"],
-    ["Upload your product file", products > 0, "uploads"],
-    ["Review suggested improvements", products > 0 && pending === 0, "review"],
-    ["Connect a channel", connected > 0, "channels"],
-    ["Publish", jobs.data.some((j) => j.state === "completed"), "jobs"],
+    ["Connect the store you are moving from", connected > 0, "migrate"],
+    ["Bring your products in", products > 0, "migrate"],
+    ["Review suggested improvements", products > 0 && pending === 0, pending ? "review" : "migrate"],
+    ["Connect the store you are moving to", connected > 1, "migrate"],
+    ["Preview and publish", published, "migrate"],
   ];
   const next = steps.find(([, done]) => !done);
+  pipNext = next ? { label: next[0].charAt(0).toLowerCase() + next[0].slice(1), route: next[2] } : null;
+  pipOnRoute("overview", pipNext, false);
   clear(el).append(
-    h("header", { class: "page" }, h("h1", {}, "Overview")),
+    h("header", { class: "page" }, h("div", {}, h("h1", {}, `Welcome${state.me.user.name ? `, ${state.me.user.name}` : ""}`),
+      h("p", { class: "muted" }, "Move your products from one store to another, safely.")),
+      can("jobs:write") ? h("a", { class: "button primary big", href: "#/migrate" }, icon("move"), products ? "Continue moving a store" : "Move a store") : null),
     h("div", { class: "stats" },
-      stat("Products", products, "catalog"), stat("Waiting for review", pending, "review"),
-      stat("Connected channels", connected, "channels"),
+      stat("Products", products, "catalog"), stat("Suggestions to review", pending, "review"),
+      stat("Connected stores", connected, "channels"),
       stat("Jobs needing attention", jobs.data.filter((j) => ["awaiting_approval", "failed", "partially_completed", "paused"].includes(j.state)).length, "jobs")),
     h("div", { class: "grid2" },
       h("section", { class: "card" }, h("h2", {}, "Getting started"),

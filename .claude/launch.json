@@ -4,7 +4,7 @@
     {
       "name": "catalogpilot",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "catalogpilot.api.app:app", "--app-dir", "backend", "--port", "8000"],
+      "runtimeArgs": ["-m", "uvicorn", "catalogpilot.api.app:app", "--app-dir", "backend", "--port", "8000", "--no-server-header"],
       "port": 8000
     }
   ]

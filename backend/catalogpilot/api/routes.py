@@ -583,7 +583,8 @@ def _channel_view(db: Session, c: Channel) -> dict[str, Any]:
 
 
 @router.get("/platforms")
-def list_platforms() -> dict[str, Any]:
+@scoped
+def list_platforms(db: Session = Depends(get_db), auth: Auth = Depends(require(P_CHANNELS_READ))) -> dict[str, Any]:
     out = []
     for name in platforms():
         connector = get_connector(name)
@@ -661,8 +662,8 @@ def credential_usage(channel_id: str, db: Session = Depends(get_db), auth: Auth 
     channel = _channel(db, channel_id)
     rows = db.execute(select(CredentialUsage).where(CredentialUsage.credential_id == (channel.credential_id or ""))
                       .order_by(CredentialUsage.at.desc()).limit(200)).scalars().all()
-    return {"data": [{"at": u.at.isoformat(), "task_id": u.task_id, "handler": u.handler_id,
-                      "operation": u.operation, "result": u.result} for u in rows]}
+    return {"data": [{"at": u.at.isoformat(), "operation": u.operation,
+                      "result": "granted" if u.result == "granted" else "refused"} for u in rows]}
 
 
 @router.delete("/channels/{channel_id}")
@@ -959,17 +960,20 @@ def decide(body: DecideIn, db: Session = Depends(get_db), auth: Auth = Depends(r
 
 
 @router.get("/ai/status")
-def ai_status() -> dict[str, Any]:
+@scoped
+def ai_status(db: Session = Depends(get_db), auth: Auth = Depends(require(P_CATALOG_READ))) -> dict[str, Any]:
+    """Signed-in users only, and only what a seller needs: is AI available, and which kinds of
+    suggestion can be applied automatically. Model names and benchmark internals stay private."""
     cal = confidence.load()
     from ..ai import gateway
-    from ..config import get_settings
 
-    return {"provider": get_settings().ai_provider, "paused": gateway.killed(), "calibration": cal.meta,
-            "auto_approve_thresholds": cal.tau}
+    return {"paused": gateway.killed(),
+            "automatic_for": sorted(task for task, tau in cal.tau.items() if tau is not None)}
 
 
 @router.get("/taxonomy")
-def taxonomy_search(q: str = "") -> dict[str, Any]:
+@scoped
+def taxonomy_search(q: str = "", db: Session = Depends(get_db), auth: Auth = Depends(require(P_CATALOG_READ))) -> dict[str, Any]:
     if q:
         return {"data": [{"id": n.id, "path": n.path, "score": round(s, 3)} for n, s in taxonomy.retrieve(q[:200], 10)]}
     return {"data": [{"id": n.id, "path": n.path} for n in taxonomy.nodes()]}

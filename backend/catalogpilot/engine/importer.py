@@ -66,6 +66,9 @@ def create_import_job(db: Session, principal: Principal, channel_id: str, catalo
     caps = get_connector(channel.platform).capabilities()
     if not caps.supports_import:
         raise jobs.JobError("import_not_supported", "Products cannot be imported from this kind of channel.", 422)
+    if channel.role == "destination":
+        # The seller connected this store to publish to. Reading from it needs their say-so.
+        raise jobs.JobError("import_not_allowed", f"'{channel.name}' is set up for publishing only.", 422)
     if caps.credential_kinds and not channel.credential_id:
         raise jobs.JobError("channel_not_connected", f"'{channel.name}' is not connected yet.")
     running = db.execute(

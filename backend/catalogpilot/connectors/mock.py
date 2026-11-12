@@ -57,7 +57,7 @@ def reset() -> None:
 
 class MockConnector:
     platform = "mock"
-    label = "Sandbox store (mock)"
+    label = "Practice store"
 
     def capabilities(self) -> Capabilities:
         return Capabilities(
@@ -81,8 +81,9 @@ class MockConnector:
 
     def test_connection(self, ctx: CallContext) -> list[str]:
         self._gate(ctx)
-        if not ctx.secret.get("access_token"):
-            raise AuthError("The access token is empty.")
+        if len(ctx.secret.get("access_token") or "") < 12:
+            # Behaves like a real store refusing a bad key, so the "wrong key" path can be tried safely.
+            raise AuthError("The practice store did not accept that key. Use any text of 12 or more characters.")
         return ["read_products", "write_products"]
 
     def upsert_product(self, ctx: CallContext, payload: dict[str, Any], external_id: str | None,

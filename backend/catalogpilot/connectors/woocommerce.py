@@ -12,7 +12,7 @@ from typing import Any
 
 from ..catalog.cleaning import MoneyError, format_money, parse_money
 from . import http
-from .sdk import CallContext, Capabilities, UnsupportedOperation, WriteResult
+from .sdk import CallContext, Capabilities, WriteResult
 
 MARKER = "_catalogpilot_source_key"
 

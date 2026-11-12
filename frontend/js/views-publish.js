@@ -25,7 +25,7 @@ export async function channelsView(el) {
     h("div", { class: "banner info" },
       h("strong", {}, "What we accept: "), "an API key or token created for this integration. ",
       h("strong", {}, "Never "), "your store login password, a verification code or card details."),
-    channel.platform === "mock" ? h("p", { class: "muted" }, "The sandbox store accepts any token of 12+ characters, e.g. sandbox-token-123.") : null,
+    channel.platform === "mock" ? h("p", { class: "muted" }, "The practice store accepts any text of 12 or more characters, for example practice-key-123.") : null,
     inputs.map(([name, input]) => field(LABEL[name] || name, input)),
     h("p", { class: "muted small" }, "We test the key against the store before saving. After saving, nobody, including you and our staff, can view it again; you can only replace or remove it."),
     h("div", { class: "row end" }, h("button", { class: "primary", type: "submit" }, "Verify and save"))));
@@ -34,23 +34,26 @@ export async function channelsView(el) {
 
   const add = () => {
     const platform = h("select", {}, platforms.data.map((p) =>
-      h("option", { value: p.platform }, p.verified ? p.label : `${p.label} (preview, not yet verified against live stores)`)));
+      h("option", { value: p.platform }, p.platform === "mock" ? "Practice store" : p.beta ? `${p.label} (beta)` : p.label)));
+    const role = h("select", {}, [["destination", "Publish products to it"], ["source", "Read products from it"], ["both", "Both"]].map(([v, l]) => h("option", { value: v }, l)));
+    const roleField = field("What will you use it for?", role);
     const name = h("input", { type: "text", required: true, maxlength: "200" });
     const url = h("input", { type: "url", placeholder: "https://your-store.example.com" });
     const urlField = field("Store URL", url, "Must start with https://");
     const sync = () => {
       const p = byPlatform[platform.value];
       urlField.hidden = !p.needs_base_url; url.required = p.needs_base_url;
+      roleField.hidden = !p.can_import; if (!p.can_import) role.value = "destination";
       if (!name.value || platforms.data.some((x) => x.label === name.value)) name.value = p.label;
     };
     platform.addEventListener("change", sync); sync();
-    const m = modal("Add a channel", h("form", { onsubmit: action(async (event) => {
+    const m = modal("Add a store", h("form", { onsubmit: action(async (event) => {
       event.preventDefault();
-      const created = await api.post("/channels", { platform: platform.value, name: name.value, base_url: urlField.hidden ? null : url.value });
+      const created = await api.post("/channels", { platform: platform.value, name: name.value, role: role.value, base_url: urlField.hidden ? null : url.value });
       m.close();
       if (created.needs_credential) connect(created); else refresh();
-    }) }, field("Where do you want to publish?", platform), field("Name", name), urlField,
-    h("div", { class: "row end" }, h("button", { class: "primary", type: "submit" }, "Add channel"))));
+    }) }, field("Which kind of store?", platform), roleField, field("Name", name), urlField,
+    h("div", { class: "row end" }, h("button", { class: "primary", type: "submit" }, "Add store"))));
   };
 
   const cards = channels.data.map((c) => h("article", { class: "card channel" },
@@ -73,8 +76,9 @@ export async function channelsView(el) {
         modal("Key details", h("div", {},
           h("p", {}, `Key ending ${meta.hint.replace("…", "")} · added ${when(meta.created_at)} · last used ${when(meta.last_used_at)} · rotate by ${meta.rotate_due_at ? new Date(meta.rotate_due_at).toLocaleDateString() : "—"}`),
           h("h3", {}, "Every use of this key"),
-          table([{ label: "When", render: (u) => when(u.at) }, { label: "Operation", render: (u) => u.operation },
-            { label: "Result", render: (u) => u.result }], usage.data, { empty: "Not used yet." })), { wide: true });
+          table([{ label: "When", render: (u) => when(u.at) },
+            { label: "Used for", render: (u) => ({ read: "Reading products", write: "Publishing", delete: "Removing listings" }[u.operation] || u.operation) },
+            { label: "Result", render: (u) => (u.result === "granted" ? "Allowed" : "Refused") }], usage.data, { empty: "Not used yet." })), { wide: true });
       }) }, "Key details") : null,
       admin && c.connected && c.needs_credential ? h("button", { class: "link danger", onclick: action(async () => {
         if (!await confirmDialog(`Disconnect ${c.name}?`, "The stored key is destroyed immediately and publishing to this channel stops. Listings already on the store are not removed.", "Disconnect", true)) return;
@@ -82,10 +86,10 @@ export async function channelsView(el) {
       }) }, "Disconnect") : null)));
 
   clear(el).append(
-    h("header", { class: "page" }, h("h1", {}, "Channels"), admin ? h("button", { class: "primary", onclick: add }, "Add channel") : null),
+    h("header", { class: "page" }, h("h1", {}, "Stores"), admin ? h("button", { class: "primary", onclick: add }, "Add store") : null),
     channels.data.length ? h("div", { class: "cards" }, cards)
-      : emptyState("No channels yet", "A channel is a store or marketplace you publish to. Start with the sandbox store to try publishing safely.",
-        admin ? h("button", { class: "primary", onclick: add }, "Add a channel") : null));
+      : emptyState("No stores connected yet", "Connect the store you are moving from and the one you are moving to. The practice store lets you try everything safely first.",
+        admin ? h("a", { class: "button primary", href: "#/migrate" }, "Move a store") : null));
 }
 
 // ------------------------------------------------------------------ jobs
@@ -123,7 +127,7 @@ export async function jobsView(el, params) {
   clear(el).append(
     h("header", { class: "page" }, h("h1", {}, "Publishing"), can("jobs:write") ? h("button", { class: "primary", onclick: create }, "Publish products") : null),
     table([
-      { label: "Job", render: (j) => h("a", { href: `#/jobs/${j.id}` }, j.kind === "rollback" ? "Rollback" : j.options.sandbox ? "Publish (trial)" : "Publish") },
+      { label: "Job", render: (j) => h("a", { href: `#/jobs/${j.id}` }, j.kind === "rollback" ? "Rollback" : j.kind === "import" ? "Import from store" : j.options.sandbox ? "Publish (trial)" : "Publish") },
       { label: "Channels", render: (j) => j.channel_ids.map((id) => names[id] || "Removed channel").join(", ") },
       { label: "Status", render: (j) => stateBadge(j.state) },
       { label: "Progress", render: (j) => progressText(j) },
@@ -179,7 +183,7 @@ async function jobDetail(el, jobId) {
     clear(head).append(
       h("header", { class: "page" },
         h("div", {}, h("a", { class: "muted small", href: "#/jobs" }, "← Publishing"),
-          h("h1", {}, job.kind === "rollback" ? "Rollback" : "Publish", " ", stateBadge(job.state))),
+          h("h1", {}, job.kind === "rollback" ? "Rollback" : job.kind === "import" ? "Import from store" : "Publish", " ", stateBadge(job.state))),
         h("div", { class: "row" }, buttons)),
       job.needs_second_approver ? h("div", { class: "banner warn" }, "This job removes many listings, so a second person must also approve it.") : null,
       job.state === "awaiting_approval" && job.kind === "publish" ? h("section", { class: "card" }, h("h2", {}, "Preview: nothing has been sent yet"),
@@ -260,7 +264,9 @@ export async function activityView(el) {
       { label: "When", render: (e) => when(e.at) },
       { label: "Who", render: (e) => (e.actor_type === "system" ? "System" : e.actor_type === "api_key" ? `API key ${e.actor_id}` : "User") },
       { label: "What", render: (e) => ACTION(e.action) },
-      { label: "Details", render: (e) => h("span", { class: "muted small clip" }, Object.entries(e.detail).map(([k, v]) => `${k}: ${show(v)}`).join(", ").slice(0, 160)) },
+      { label: "Details", render: (e) => h("span", { class: "muted small clip" }, Object.entries(e.detail)
+        .filter(([k, v]) => !k.endsWith("_id") && k !== "scopes" && (typeof v === "number" || typeof v === "string" || typeof v === "boolean"))
+        .map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(", ").slice(0, 160)) },
     ], rows, { empty: "No activity yet." }), before ? h("div", { class: "row center pad" }, h("button", { onclick: action(load) }, "Load more")) : null);
   }
   clear(el).append(

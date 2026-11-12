@@ -26,21 +26,62 @@ export function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+export function svg(tag, attrs = {}, ...children) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== null && value !== undefined && value !== false) el.setAttribute(key, value);
+  }
+  for (const child of children.flat(Infinity)) if (child) el.append(child);
+  return el;
+}
+
+// Line icons (24x24, stroke only) so the interface never relies on emoji or icon fonts.
+const ICONS = {
+  home: "M3 11l9-8 9 8M5 10v10h14V10M10 20v-6h4v6",
+  move: "M4 7h11m0 0l-3-3m3 3l-3 3M20 17H9m0 0l3-3m-3 3l3 3",
+  box: "M3 7l9-4 9 4v10l-9 4-9-4V7zm0 0l9 4m0 0l9-4m-9 4v10",
+  upload: "M12 16V4m0 0l-4 4m4-4l4 4M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3",
+  check: "M4 12l5 5L20 6",
+  plug: "M9 3v5m6-5v5M7 8h10v4a5 5 0 01-10 0V8zm5 9v4",
+  send: "M4 12l16-8-6 16-3-7-7-1z",
+  clock: "M12 7v5l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z",
+  gear: "M12 9a3 3 0 100 6 3 3 0 000-6zm8 3l-2 .6-.5 1.3 1 1.9-1.6 1.6-1.9-1-1.3.5L13 20h-2l-.6-2.1-1.3-.5-1.9 1-1.6-1.6 1-1.9-.5-1.3L4 12l2.1-.6.5-1.3-1-1.9 1.6-1.6 1.9 1 1.3-.5L11 4h2l.6 2.1 1.3.5 1.9-1 1.6 1.6-1 1.9.5 1.3L20 12z",
+  shield: "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3zm-3 9l2 2 4-4",
+};
+export function icon(name) {
+  return svg("svg", { viewBox: "0 0 24 24", class: "icon-svg", "aria-hidden": "true", focusable: "false" },
+    svg("path", { d: ICONS[name] || ICONS.box, fill: "none", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round", "stroke-linejoin": "round" }));
+}
+
 export const clear = (el) => { el.replaceChildren(); el.append = appendPresent; return el; };
 
-export function toast(message, kind = "info") {
+export function toast(message, kind = "info", code = null) {
   const region = document.getElementById("toasts");
   const item = h("div", { class: `toast ${kind}`, role: kind === "error" ? "alert" : "status" }, message);
   region.append(item);
   setTimeout(() => item.remove(), kind === "error" ? 9000 : 4500);
+  window.dispatchEvent(new CustomEvent("cp:feedback", { detail: { kind, message, code } }));
 }
+
+// Field problems in plain words. Internal field paths and validator codes are never shown.
+const FIELD_WORDS = { email: "email address", password: "password", name: "name", base_url: "store URL", new_password: "new password",
+  title: "title", code: "code", token: "code", role: "role", size: "file size", sha256: "file" };
+const CODE_WORDS = { missing: "is required", string_too_short: "is too short", string_too_long: "is too long", string_pattern_mismatch: "is not in the right format",
+  value_error: "is not valid", extra_forbidden: "is not allowed", int_parsing: "must be a number", greater_than: "is too small", less_than_equal: "is too large" };
 
 export function showError(error) {
   const extra = error?.problem?.errors;
-  const detail = Array.isArray(extra) && extra.length
-    ? `${error.message} ${extra.map((e) => (typeof e === "string" ? e : `${e.field}: ${e.code}`)).join("; ")}`
-    : error?.message || "Something went wrong.";
-  toast(detail, "error");
+  let detail = error?.message || "Something went wrong. Please try again.";
+  if (Array.isArray(extra) && extra.length) {
+    const lines = extra.slice(0, 3).map((e) => {
+      if (typeof e === "string") return e;
+      const field = String(e.field || "").split(".").pop();
+      return `The ${FIELD_WORDS[field] || "value"} ${CODE_WORDS[e.code] || "is not valid"}.`;
+    });
+    detail = [...new Set(lines)].join(" ");
+  }
+  toast(detail, "error", error?.code || null);
 }
 
 // Runs an async action from a button: disables it while pending and reports failures.
