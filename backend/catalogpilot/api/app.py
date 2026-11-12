@@ -12,11 +12,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .. import __version__, db
 from ..catalog.service import NotFound, VersionConflict
-from ..config import get_settings
+from ..config import REPO_ROOT, get_settings
 from ..datahub.service import UploadError
 from ..engine.worker import WorkerThread
 from ..identity.service import AuthError
@@ -28,6 +29,10 @@ from .deps import Problem, problem_response
 
 log = logging.getLogger("catalogpilot.api")
 MAX_JSON_BODY = 1024 * 1024
+FRONTEND_DIR = REPO_ROOT / "frontend"
+# No inline scripts or styles, no third-party origins: an injected string cannot execute.
+UI_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+          "form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
 
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
@@ -90,9 +95,15 @@ def create_app() -> FastAPI:
                 response = problem_response(request, 500, "internal_error",
                                             "Something went wrong on our side. Quote the request id to support.")
         response.headers["X-Request-Id"] = request.state.request_id
+        is_api = request.url.path.startswith("/v1") or request.url.path == "/healthz"
         for name, value in SECURITY_HEADERS.items():
-            if name == "Content-Security-Policy" and request.url.path in ("/docs", "/openapi.json"):
-                continue
+            if name == "Content-Security-Policy":
+                if request.url.path in ("/docs", "/openapi.json"):
+                    continue
+                if not is_api:
+                    value = UI_CSP
+            if name == "Cache-Control" and not is_api:
+                value = "no-cache"  # static files revalidate, so a new release is picked up at once
             response.headers.setdefault(name, value)
         if settings.cookie_secure:
             response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
@@ -150,6 +161,11 @@ def create_app() -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok", "version": __version__}
+
+    # The web app is plain static files served from the same origin as the API, so the
+    # session cookie is first-party and no cross-origin access needs to be opened up.
+    if FRONTEND_DIR.is_dir():
+        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="web")
 
     return app
 

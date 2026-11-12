@@ -1,0 +1,10 @@
+Handle,Title,Body (HTML),Vendor,Type,Tags,Option1 Name,Option1 Value,Variant SKU,Variant Price,Variant Compare At Price,Cost per item,Variant Inventory Qty,Variant Barcode,Image Src,Status,Material
+classic-tee,CLASSIC COTTON T-SHIRT - FREE SHIPPING!!!,"<p>Soft everyday tee in pure cotton. Colour: navy.</p><p>Order now at www.cheap-deals.example</p>",Northwind,Shirts,"summer, basics",Size,S,TEE-NAVY-S,19.99,24.99,7.50,25,4006381333931,https://images.example.com/tee-navy.jpg,active,Cotton
+classic-tee,,,,,,Size,M,TEE-NAVY-M,19.99,24.99,7.50,40,,,,
+classic-tee,,,,,,Size,L,TEE-NAVY-L,19.99,24.99,7.50,12,,,,
+canvas-backpack,Northwind Canvas Backpack Olive,"<p>Roomy 20 l canvas backpack with padded laptop sleeve.</p>",Northwind,Bags,"travel, school",,,BAG-OLV-20,54.00,,21.00,8,,https://images.example.com/backpack.jpg,active,Canvas
+ceramic-mug,ceramic coffee mug white 350 ml,"<p>Dishwasher-safe ceramic mug.</p><script>alert('x')</script>",Northwind,Kitchen,gift,,,MUG-WHT-350,"12,50",,3.10,0,,https://images.example.com/mug.jpg,active,Ceramic
+wireless-headphones,Northwind Wireless Bluetooth Headphones Black - BEST PRICE,"<p>Over-ear bluetooth headphones with 30 h battery.</p>",Northwind,Audio,"audio, tech",,,HP-BLK-01,89.00,119.00,38.00,15,12345678,https://images.example.com/headphones.jpg,active,
+yoga-mat,Yoga Mat Purple 6 mm,"<p>Non-slip yoga mat.</p>",Northwind,Fitness,fitness,,,YOGA-PUR-6,29.00,,11.00,30,,,draft,Rubber
+broken-row,Lamp with no price,,Northwind,Decor,,,,LAMP-01,abc,,,5,,,active,
+,Row without a handle,,Northwind,,,,,NOKEY-1,5.00,,,1,,,active,

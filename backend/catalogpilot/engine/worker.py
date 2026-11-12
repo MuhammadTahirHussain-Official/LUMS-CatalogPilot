@@ -287,14 +287,14 @@ def _execute(claim: Claim, worker_id: str, crash_hook=None) -> None:
         except RetryableError as exc:
             db.rollback()
             _record_outcome(db, channel, ok=False, throttled=exc.throttled, retry_after=exc.retry_after)
-            _try(db, lambda: _retry_or_dead(db, claim, item, job, exc.message, exc.retry_after, exc.throttled))
+            _try(db, lambda e=exc: _retry_or_dead(db, claim, item, job, e.message, e.retry_after, e.throttled))
         except RejectedError as exc:
             db.rollback()
             _record_outcome(db, channel, ok=True)  # the platform answered; the item is the problem
-            _try(db, lambda: _fail(db, claim, item, job, exc))
+            _try(db, lambda e=exc: _fail(db, claim, item, job, e))
         except ConnectorError as exc:
             db.rollback()
-            _try(db, lambda: _fail(db, claim, item, job, exc))
+            _try(db, lambda e=exc: _fail(db, claim, item, job, e))
         except Exception as exc:  # a bug or an unexpected response: never take the handler down
             db.rollback()
             log.exception("unexpected error on item %s", claim.item_id)
